@@ -1,0 +1,65 @@
+# ====================== 
+# Dependencias
+# ====================== 
+FROM node:23-alpine3.21 AS deps
+
+WORKDIR /usr/src/app
+
+COPY package*.json ./
+
+RUN npm install
+
+# ====================== 
+# Builder -> Construye la aplicación
+# ====================== 
+FROM node:23-alpine3.21 AS build
+
+
+ARG ORDERS_DATABASE_URL
+ENV DATABASE_URL=${ORDERS_DATABASE_URL}}
+
+WORKDIR /usr/src/app
+
+#Copiar de deps, los módulos de node
+COPY --from=deps /usr/src/app/node_modules ./node_modules
+
+#Copiar todo el código fuente (contexto) de la aplicación
+COPY . .
+
+
+#Sitio ideal para ejecutar el testing.
+#Si el testing falla, detiende la construcción de la imagen.
+#RUN npm run test
+
+#Construimos Prisma para que no tenga errores al iniciar la base de datos.
+RUN npx prisma migrate deploy
+RUN npx prisma generate
+
+#Crea la carpeta ./dist
+RUN npm run build
+
+#Instala solo lo necesario para producción (rápido y seguro).
+#Borra el caché para que la imagen no quede gorda e innecesaria.
+RUN npm ci -f --only=production && npm cache clean --force
+
+# ====================== 
+# Crear imagen Docker
+# ======================
+FROM node:23-alpine3.21 AS prod
+
+WORKDIR /usr/src/app
+
+COPY --from=build /usr/src/app/node_modules ./node_modules
+#Copiar la carpeta ./dist
+COPY --from=build /usr/src/app/dist ./dist
+
+#Podemos enviar variables de entorno por acá.
+ENV NODE_ENV=production
+
+#Usamos usuario con menos privilegios
+#Nos ayuda a estar seguros que no hayan cambios inesperados.
+USER node
+
+EXPOSE 3000
+CMD [ "node", "dist/main.js" ]
+
